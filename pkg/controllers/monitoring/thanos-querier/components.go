@@ -10,6 +10,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	msoapi "github.com/rhobs/observability-operator/pkg/apis/monitoring/v1alpha1"
+	"github.com/rhobs/observability-operator/pkg/assets"
 	"github.com/rhobs/observability-operator/pkg/reconciler"
 )
 
@@ -29,6 +30,11 @@ func newThanosQuerierDeployment(name string, spec *msoapi.ThanosQuerier, sidecar
 		"--log.format=logfmt",
 		"--query.replica-label=prometheus_replica",
 		"--query.auto-downsampling",
+		"--grpc-client-tls-secure",
+		"--grpc-client-server-name=prometheus-grpc",
+		"--grpc-client-tls-ca=/etc/thanos/tls-sidecar-assets/ca.crt",
+		"--grpc-client-tls-key=/etc/thanos/tls-sidecar-assets/thanos-querier-client.key",
+		"--grpc-client-tls-cert=/etc/thanos/tls-sidecar-assets/thanos-querier-client.crt",
 	}
 	for _, endpoint := range sidecarUrls {
 		args = append(args, fmt.Sprintf("--endpoint=%s", endpoint))
@@ -86,6 +92,12 @@ func newThanosQuerierDeployment(name string, spec *msoapi.ThanosQuerier, sidecar
 									Type: corev1.SeccompProfileTypeRuntimeDefault,
 								},
 							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "thanos-sidecar-tls-assets",
+									MountPath: "/etc/thanos/tls-sidecar-assets",
+								},
+							},
 						},
 					},
 					NodeSelector: map[string]string{
@@ -97,10 +109,74 @@ func newThanosQuerierDeployment(name string, spec *msoapi.ThanosQuerier, sidecar
 							Type: corev1.SeccompProfileTypeRuntimeDefault,
 						},
 					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "thanos-sidecar-tls-assets",
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{
+									SecretName: assets.GRPCSecretName,
+								},
+							},
+						},
+					},
 				},
 			},
 			ProgressDeadlineSeconds: ptr.To(int32(300)),
 		},
+	}
+	if spec.Spec.WebTLSConfig != nil {
+		thanos.Spec.Template.Spec.Volumes = append(thanos.Spec.Template.Spec.Volumes, []corev1.Volume{
+			{
+				Name: "thanos-web-tls-key",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: spec.Spec.WebTLSConfig.PrivateKey.Name,
+					},
+				},
+			},
+			{
+				Name: "thanos-web-tls-cert",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: spec.Spec.WebTLSConfig.Certificate.Name,
+					},
+				},
+			},
+			{
+				Name: "thanos-web-http-conf",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: httpConfCMName,
+						},
+					},
+				},
+			},
+		}...)
+		thanos.Spec.Template.Spec.Containers[0].VolumeMounts = append(thanos.Spec.Template.Spec.Containers[0].VolumeMounts, []corev1.VolumeMount{
+			{
+				Name:      "thanos-web-tls-key",
+				MountPath: "/etc/thanos/tls-assets/web-cert-secret",
+				ReadOnly:  true,
+			},
+			{
+				Name:      "thanos-web-tls-cert",
+				MountPath: "/etc/thanos/tls-assets/web-key-secret",
+				ReadOnly:  true,
+			},
+			{
+				Name:      "thanos-web-http-conf",
+				MountPath: "/etc/thanos/tls-assets/web-http-conf-cm",
+				ReadOnly:  true,
+			},
+		}...)
+	}
+	if len(tlsHashes) > 0 {
+		tlsAnnotations := map[string]string{}
+		for name, hash := range tlsHashes {
+			tlsAnnotations[fmt.Sprintf("monitoring.openshift.io/%s-hash", name)] = hash
+		}
+		thanos.Spec.Template.ObjectMeta.Annotations = tlsAnnotations
 	}
 
 	return thanos

@@ -6,6 +6,7 @@ require (
 	github.com/go-logr/logr v1.4.2
 	github.com/google/go-cmp v0.6.0
 	github.com/openshift/api v0.0.0-20240301093301-ce10821dc999
+	github.com/openshift/library-go v0.0.0-20240216151214-738f3fa4ccf8
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/common v0.59.1
 	github.com/rhobs/obo-prometheus-operator v0.77.1-rhobs1
@@ -106,6 +107,7 @@ require (
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
+	k8s.io/apiserver v0.31.1 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20240903163716-9e1beecbcb38 // indirect
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
