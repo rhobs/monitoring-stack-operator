@@ -2,6 +2,7 @@ package uiplugin
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	osv1 "github.com/openshift/api/console/v1"
@@ -19,12 +20,15 @@ func createMonitoringPluginInfo(plugin *uiv1alpha1.UIPlugin, namespace, name, im
 		return nil, fmt.Errorf("monitoring configuration can not be empty for plugin type %s", plugin.Spec.Type)
 	}
 
-	if config.Alertmanager.Url == "" {
-		return nil, fmt.Errorf("alertmanager location can not be empty for plugin type %s", plugin.Spec.Type)
+	// Get feature flag status determined from compatbility matrix
+	persesDashboardsFeatureEnabled := slices.Contains(features, "perses-dashboards")
+	acmAlertingFeatureEnabled := slices.Contains(features, "acm-alerting")
+	if !acmAlertingFeatureEnabled && !persesDashboardsFeatureEnabled {
+		return nil, fmt.Errorf("monitoring feature flags were not set, check cluster compatibility")
 	}
-	if config.ThanosQuerier.Url == "" {
-		return nil, fmt.Errorf("ThanosQuerier location can not be empty for plugin type %s", plugin.Spec.Type)
-	}
+
+	invalidACMConfig := config.Alertmanager.Url == "" || config.ThanosQuerier.Url == ""
+	invalidPersesConfig := config.Perses.Name == "" || config.Perses.Namespace == ""
 
 	pluginInfo := &UIPluginInfo{
 		Image:       image,
@@ -33,8 +37,6 @@ func createMonitoringPluginInfo(plugin *uiv1alpha1.UIPlugin, namespace, name, im
 		DisplayName: "Monitoring Console Plugin",
 		ExtraArgs: []string{
 			fmt.Sprintf("-features=%s", strings.Join(features, ",")),
-			fmt.Sprintf("-alertmanager=%s", config.Alertmanager.Url),
-			fmt.Sprintf("-thanos-querier=%s", config.ThanosQuerier.Url),
 			"-config-path=/opt/app-root/config",
 			"-static-path=/opt/app-root/web/dist",
 		},
@@ -52,30 +54,6 @@ func createMonitoringPluginInfo(plugin *uiv1alpha1.UIPlugin, namespace, name, im
 					},
 				},
 			},
-			{
-				Alias:         "alertmanager-proxy",
-				Authorization: "UserToken",
-				Endpoint: osv1.ConsolePluginProxyEndpoint{
-					Type: osv1.ProxyTypeService,
-					Service: &osv1.ConsolePluginProxyServiceConfig{
-						Name:      name,
-						Namespace: namespace,
-						Port:      9444,
-					},
-				},
-			},
-			{
-				Alias:         "thanos-proxy",
-				Authorization: "UserToken",
-				Endpoint: osv1.ConsolePluginProxyEndpoint{
-					Type: osv1.ProxyTypeService,
-					Service: &osv1.ConsolePluginProxyServiceConfig{
-						Name:      name,
-						Namespace: namespace,
-						Port:      9445,
-					},
-				},
-			},
 		},
 		LegacyProxies: []osv1alpha1.ConsolePluginProxy{
 			{
@@ -88,28 +66,99 @@ func createMonitoringPluginInfo(plugin *uiv1alpha1.UIPlugin, namespace, name, im
 					Port:      9443,
 				},
 			},
-			{
-				Type:      "Service",
-				Alias:     "alertmanager-proxy",
-				Authorize: true,
-				Service: osv1alpha1.ConsolePluginProxyServiceConfig{
+		},
+	}
+
+	if persesDashboardsFeatureEnabled && !invalidPersesConfig {
+		pluginInfo.Proxies = append(pluginInfo.Proxies, osv1.ConsolePluginProxy{
+			Alias:         "perses",
+			Authorization: "UserToken",
+			Endpoint: osv1.ConsolePluginProxyEndpoint{
+				Type: osv1.ProxyTypeService,
+				Service: &osv1.ConsolePluginProxyServiceConfig{
+					Name:      config.Perses.Name,
+					Namespace: config.Perses.Namespace,
+					Port:      8080,
+				},
+			},
+		})
+		pluginInfo.LegacyProxies = append(pluginInfo.LegacyProxies, osv1alpha1.ConsolePluginProxy{
+			Type:      "Service",
+			Alias:     "perses",
+			Authorize: true,
+			Service: osv1alpha1.ConsolePluginProxyServiceConfig{
+				Name:      config.Perses.Name,
+				Namespace: config.Perses.Namespace,
+				Port:      8080,
+			},
+		})
+
+		if !acmAlertingFeatureEnabled || invalidACMConfig {
+			return pluginInfo, nil
+		}
+	}
+
+	if invalidACMConfig {
+		if config.Alertmanager.Url == "" {
+			return nil, fmt.Errorf("alertmanager location can not be empty for plugin type %s", plugin.Spec.Type)
+		}
+		if config.ThanosQuerier.Url == "" {
+			return nil, fmt.Errorf("thanosQuerier location can not be empty for plugin type %s", plugin.Spec.Type)
+		}
+	}
+
+	pluginInfo.ExtraArgs = append(pluginInfo.ExtraArgs,
+		fmt.Sprintf("-alertmanager=%s", config.Alertmanager.Url),
+		fmt.Sprintf("-thanos-querier=%s", config.ThanosQuerier.Url),
+	)
+	pluginInfo.Proxies = append(pluginInfo.Proxies,
+		osv1.ConsolePluginProxy{
+			Alias:         "alertmanager-proxy",
+			Authorization: "UserToken",
+			Endpoint: osv1.ConsolePluginProxyEndpoint{
+				Type: osv1.ProxyTypeService,
+				Service: &osv1.ConsolePluginProxyServiceConfig{
 					Name:      name,
 					Namespace: namespace,
 					Port:      9444,
 				},
 			},
-			{
-				Type:      "Service",
-				Alias:     "thanos-proxy",
-				Authorize: true,
-				Service: osv1alpha1.ConsolePluginProxyServiceConfig{
+		},
+		osv1.ConsolePluginProxy{
+			Alias:         "thanos-proxy",
+			Authorization: "UserToken",
+			Endpoint: osv1.ConsolePluginProxyEndpoint{
+				Type: osv1.ProxyTypeService,
+				Service: &osv1.ConsolePluginProxyServiceConfig{
 					Name:      name,
 					Namespace: namespace,
 					Port:      9445,
 				},
 			},
 		},
-	}
+	)
+	pluginInfo.LegacyProxies = append(pluginInfo.LegacyProxies,
+		osv1alpha1.ConsolePluginProxy{
+			Type:      "Service",
+			Alias:     "alertmanager-proxy",
+			Authorize: true,
+			Service: osv1alpha1.ConsolePluginProxyServiceConfig{
+				Name:      name,
+				Namespace: namespace,
+				Port:      9444,
+			},
+		},
+		osv1alpha1.ConsolePluginProxy{
+			Type:      "Service",
+			Alias:     "thanos-proxy",
+			Authorize: true,
+			Service: osv1alpha1.ConsolePluginProxyServiceConfig{
+				Name:      name,
+				Namespace: namespace,
+				Port:      9445,
+			},
+		},
+	)
 
 	return pluginInfo, nil
 }
